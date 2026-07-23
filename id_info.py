@@ -143,7 +143,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
   welcome_text = (
       f"{username}\n\n"
-      f"👋 স্বাগতম!\n"
+      f"👋 Welcome!\n"
       f"<b>ID:</b> <code>{user.id}</code>\n"
       f"<b>Name:</b> {full_name}"
   )
