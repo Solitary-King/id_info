@@ -31,6 +31,16 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
     self.end_headers()
     self.wfile.write(b"Bot is running alive!")
 
+  # আপটাইম রোবটের অনেক সময় HEAD রিকোয়েস্টের প্রয়োজন হয়, তাই এটি যোগ করা হলো
+  def do_HEAD(self):
+    self.send_response(200)
+    self.send_header("Content-type", "text/plain")
+    self.end_headers()
+
+  # লগ ডাবাগিং এড়াতে লিনাক্স সার্ভারে লজিক পরিষ্কার রাখা
+  def log_message(self, format, *args):
+    return
+
 
 def run_dummy_server():
   # Render স্বয়ংক্রিয়ভাবে PORT নামক Environment Variable সেট করে দেয়
