@@ -1,0 +1,230 @@
+import io
+import os
+import sqlite3
+from flask import Flask, request
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    KeyboardButtonRequestChat,
+    KeyboardButtonRequestUsers,
+    ReplyKeyboardMarkup,
+    Update,
+)
+from telegram.ext import (
+    ApplicationBuilder,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
+
+# ----------------------------------------------------
+BOT_TOKEN = "8846566321:AAFkz8XWHvAIw9VmJg_Dq6Ehot2eeKj8WGQ"
+ADMIN_ID = 6535070545
+# ----------------------------------------------------
+
+# Vercel-এর Serverless SQLite এর জন্য /tmp ডিরেক্টরি
+DB_PATH = "/tmp/bot_data.db" if os.environ.get("VERCEL") else "bot_data.db"
+
+app_flask = Flask(__name__)
+
+# --- ডাটাবেজ ফাংশনসমূহ ---
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            first_name TEXT,
+            username TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+def add_user(user_id, first_name, username):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT OR REPLACE INTO users (user_id, first_name, username) 
+        VALUES (?, ?, ?)
+    """, (user_id, first_name, username))
+    conn.commit()
+    conn.close()
+
+def get_total_users():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM users")
+    count = cursor.fetchone()[0]
+    conn.close()
+    return count
+
+def get_all_users_details():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id, first_name, username FROM users")
+    users = cursor.fetchall()
+    conn.close()
+    return users
+
+# --- এডমিন প্যানেল কিবোর্ড ---
+def get_admin_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📊 Refresh Stats", callback_data="refresh_stats")],
+        [InlineKeyboardButton("📁 Export All Users Data", callback_data="export_users")],
+        [InlineKeyboardButton("📢 Broadcast Message", callback_data="broadcast_info")]
+    ])
+
+async def show_admin_panel(update: Update):
+    total_users = get_total_users()
+    admin_text = (
+        f"⚙️ <b>-- Admin Control Panel --</b> ⚙️\n\n"
+        f"👥 <b>Total Registered Users:</b> <code>{total_users}</code>\n"
+        f"⚡ <b>System Status:</b> Online ✅\n\n"
+        f"নিচের মেনু থেকে আপনার কাঙ্ক্ষিত অপশন সিলেক্ট করুন:"
+    )
+    if update.callback_query:
+        await update.callback_query.message.reply_html(admin_text, reply_markup=get_admin_keyboard())
+    else:
+        await update.message.reply_html(admin_text, reply_markup=get_admin_keyboard())
+
+# --- হ্যান্ডলারসমূহ ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    add_user(user.id, user.first_name, user.username)
+
+    username = f"@{user.username}" if user.username else "কোনো ইউজারনেম নেই"
+    full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
+
+    welcome_text = (
+        f"{username}\n\n"
+        f"👋 Welcome!\n"
+        f"<b>ID:</b> <code>{user.id}</code>\n"
+        f"<b>Name:</b> {full_name}"
+    )
+
+    keyboard = [
+        [
+            KeyboardButton(text="User", request_users=KeyboardButtonRequestUsers(request_id=1, user_is_bot=False)),
+            KeyboardButton(text="Channel", request_chat=KeyboardButtonRequestChat(request_id=2, chat_is_channel=True))
+        ],
+        [
+            KeyboardButton(text="Group", request_chat=KeyboardButtonRequestChat(request_id=3, chat_is_channel=False)),
+            KeyboardButton(text="Bot", request_users=KeyboardButtonRequestUsers(request_id=4, user_is_bot=True))
+        ]
+    ]
+
+    if user.id == ADMIN_ID:
+        keyboard.append([KeyboardButton(text="👑 Admin Panel")])
+
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    await update.message.reply_html(welcome_text, reply_markup=reply_markup)
+
+async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    text = update.message.text
+    if text == "👑 Admin Panel" and user_id == ADMIN_ID:
+        await show_admin_panel(update)
+
+async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.from_user.id != ADMIN_ID:
+        return
+
+    if query.data == "refresh_stats":
+        total_users = get_total_users()
+        admin_text = (
+            f"⚙️ <b>-- Admin Control Panel --</b> ⚙️\n\n"
+            f"👥 <b>Total Registered Users:</b> <code>{total_users}</code>\n"
+            f"⚡ <b>System Status:</b> Online ✅"
+        )
+        await query.edit_message_text(admin_text, parse_mode="HTML", reply_markup=get_admin_keyboard())
+
+    elif query.data == "export_users":
+        users = get_all_users_details()
+        if not users:
+            await query.message.reply_text("❌ কোনো ডাটা নেই।")
+            return
+
+        file_content = "ID | Name | Username\n" + "="*30 + "\n"
+        for u_id, name, uname in users:
+            file_content += f"{u_id} | {name} | @{uname if uname else 'None'}\n"
+
+        document = io.BytesIO(file_content.encode('utf-8'))
+        document.name = "users_list.txt"
+        await query.message.reply_document(document=document, caption="📄 আপনার বটের সকল ইউজারের ডাটাবেজ ফাইল।")
+
+    elif query.data == "broadcast_info":
+        await query.message.reply_html(
+            "📢 <b>সবাইকে মেসেজ পাঠাতে:</b>\n"
+            "কমান্ড লিখুন: <code>/send আপনার বার্তাটি লিখুন</code>\n\n"
+            "উদাহরণ: <code>/send আমাদের বটে নতুন আপডেট আনা হয়েছে!</code>"
+        )
+
+async def broadcast_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    msg_to_send = " ".join(context.args)
+    if not msg_to_send:
+        await update.message.reply_text("⚠️ অনুগ্রহ করে মেসেজের লেখাটি লিখুন। যেমন: `/send Hello`", parse_mode="Markdown")
+        return
+
+    users = get_all_users_details()
+    success = 0
+    failed = 0
+    status_msg = await update.message.reply_text("📢 ব্রডকাস্টিং শুরু হচ্ছে...")
+
+    for u_id, _, _ in users:
+        try:
+            await context.bot.send_message(chat_id=u_id, text=msg_to_send)
+            success += 1
+        except Exception:
+            failed += 1
+
+    await status_msg.edit_text(
+        f"✅ <b>ব্রডকাস্ট সম্পন্ন হয়েছে!</b>\n\n"
+        f"<b>Sent:</b> {success}\n"
+        f"<b>Failed/Blocked:</b> {failed}",
+        parse_mode="HTML"
+    )
+
+async def handle_users_shared(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    users_shared = update.message.users_shared
+    for shared_user in users_shared.users:
+        await update.message.reply_html(f"<b>ID:</b> <code>{shared_user.user_id}</code>")
+
+async def handle_chat_shared(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_shared = update.message.chat_shared
+    await update.message.reply_html(f"<b>ID:</b> <code>{chat_shared.chat_id}</code>")
+
+# --- Application Initialization ---
+init_db()
+ptb_app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+ptb_app.add_handler(CommandHandler("start", start))
+ptb_app.add_handler(CommandHandler("send", broadcast_send))
+ptb_app.add_handler(CallbackQueryHandler(button_click))
+ptb_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_messages))
+ptb_app.add_handler(MessageHandler(filters.StatusUpdate.USERS_SHARED, handle_users_shared))
+ptb_app.add_handler(MessageHandler(filters.StatusUpdate.CHAT_SHARED, handle_chat_shared))
+
+# --- Flask Serverless Webhook Endpoint ---
+@app_flask.route("/", methods=["GET", "POST"])
+def index():
+    if request.method == "POST":
+        async def process():
+            await ptb_app.initialize()
+            update = Update.de_json(request.get_json(force=True), ptb_app.bot)
+            await ptb_app.process_update(update)
+            await ptb_app.shutdown()
+
+        import asyncio
+        asyncio.run(process())
+        return "OK", 200
+    return "Bot is running on Vercel via Webhook!", 200
