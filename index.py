@@ -25,10 +25,10 @@ BOT_TOKEN = "8846566321:AAFkz8XWHvAIw9VmJg_Dq6Ehot2eeKj8WGQ"
 ADMIN_ID = 6535070545
 # ----------------------------------------------------
 
-# Vercel-এর Serverless SQLite এর জন্য /tmp ডিরেক্টরি
+# Vercel-এর Serverless SQLite-এর জন্য /tmp ডিরেক্টরি
 DB_PATH = "/tmp/bot_data.db" if os.environ.get("VERCEL") else "bot_data.db"
 
-app_flask = Flask(__name__)
+app = Flask(__name__)
 
 # --- ডাটাবেজ ফাংশনসমূহ ---
 def init_db():
@@ -203,7 +203,7 @@ async def handle_chat_shared(update: Update, context: ContextTypes.DEFAULT_TYPE)
     chat_shared = update.message.chat_shared
     await update.message.reply_html(f"<b>ID:</b> <code>{chat_shared.chat_id}</code>")
 
-# --- Application Initialization ---
+# --- Bot Initialization ---
 init_db()
 ptb_app = ApplicationBuilder().token(BOT_TOKEN).build()
 
@@ -214,8 +214,8 @@ ptb_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_messa
 ptb_app.add_handler(MessageHandler(filters.StatusUpdate.USERS_SHARED, handle_users_shared))
 ptb_app.add_handler(MessageHandler(filters.StatusUpdate.CHAT_SHARED, handle_chat_shared))
 
-# --- Flask Serverless Webhook Endpoint ---
-@app_flask.route("/", methods=["GET", "POST"])
+# --- Flask Serverless Endpoint ---
+@app.route("/", methods=["GET", "POST"])
 def index():
     if request.method == "POST":
         async def process():
